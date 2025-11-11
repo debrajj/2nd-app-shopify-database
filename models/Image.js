@@ -1,75 +1,50 @@
-// Image storage using Shopify Product Images
-// Uploads files to Shopify CDN and shows in Admin → Content → Files
+// Image storage using Shopify REST API
+// Uploads files to Shopify CDN and shows in Admin → Products
 
 const shopify = require('../config/shopify');
 
 class ImageService {
   constructor(session) {
     this.session = session;
-    this.client = new shopify.clients.Graphql({ session });
+    this.restClient = new shopify.clients.Rest({ session });
   }
 
-  // Get or create a dummy product for storing images
+  // Get or create a dummy product for storing images (using REST API)
   async getStorageProduct() {
-    // Check if storage product exists
-    const query = `
-      query {
-        products(first: 1, query: "tag:image-storage-app") {
-          edges {
-            node {
-              id
-              title
-            }
+    try {
+      // Search for existing storage product
+      const products = await this.restClient.get({
+        path: 'products',
+        query: { limit: 1, title: 'Image Storage App' }
+      });
+
+      if (products.body.products && products.body.products.length > 0) {
+        return products.body.products[0].id;
+      }
+
+      // Create storage product
+      const createResponse = await this.restClient.post({
+        path: 'products',
+        data: {
+          product: {
+            title: 'Image Storage App',
+            body_html: 'This product stores uploaded images. Do not delete.',
+            vendor: 'App',
+            product_type: 'Storage',
+            status: 'draft',
+            tags: 'image-storage-app,do-not-delete'
           }
         }
-      }
-    `;
+      });
 
-    const response = await this.client.query({
-      data: { query }
-    });
-
-    if (response.body.data.products.edges.length > 0) {
-      return response.body.data.products.edges[0].node.id;
+      return createResponse.body.product.id;
+    } catch (error) {
+      console.error('Error getting storage product:', error);
+      throw error;
     }
-
-    // Create storage product
-    const createMutation = `
-      mutation productCreate($input: ProductInput!) {
-        productCreate(input: $input) {
-          product {
-            id
-            title
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
-
-    const createResponse = await this.client.query({
-      data: {
-        query: createMutation,
-        variables: {
-          input: {
-            title: "Image Storage (App)",
-            status: "DRAFT",
-            tags: ["image-storage-app", "do-not-delete"]
-          }
-        }
-      }
-    });
-
-    if (createResponse.body.data.productCreate.userErrors?.length > 0) {
-      throw new Error(`Product create error: ${createResponse.body.data.productCreate.userErrors.map(e => e.message).join(', ')}`);
-    }
-
-    return createResponse.body.data.productCreate.product.id;
   }
 
-  // Upload image to Shopify CDN via product media with staged upload
+  // Upload image using REST API (simpler, no staged uploads)
   async uploadImage(fileBuffer, filename, contentType) {
     try {
       console.log('Uploading file to Shopify CDN:', filename);
@@ -78,128 +53,30 @@ class ImageService {
       const productId = await this.getStorageProduct();
       console.log('✓ Using storage product:', productId);
 
-      // Step 1: Create staged upload for IMAGE
-      const stagedUploadMutation = `
-        mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-          stagedUploadsCreate(input: $input) {
-            stagedTargets {
-              url
-              resourceUrl
-              parameters {
-                name
-                value
-              }
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
+      // Convert to base64
+      const base64Data = fileBuffer.toString('base64');
 
-      const stagedResponse = await this.client.query({
+      // Upload image using REST API
+      const response = await this.restClient.post({
+        path: `products/${productId}/images`,
         data: {
-          query: stagedUploadMutation,
-          variables: {
-            input: [{
-              filename: filename,
-              mimeType: contentType,
-              resource: "PRODUCT_IMAGE",
-              fileSize: fileBuffer.length.toString()
-            }]
+          image: {
+            attachment: base64Data,
+            filename: filename,
+            alt: filename
           }
         }
       });
 
-      if (stagedResponse.body.data.stagedUploadsCreate.userErrors?.length > 0) {
-        throw new Error(`Staged upload error: ${stagedResponse.body.data.stagedUploadsCreate.userErrors.map(e => e.message).join(', ')}`);
-      }
-
-      const { url, resourceUrl, parameters } = stagedResponse.body.data.stagedUploadsCreate.stagedTargets[0];
-      console.log('✓ Staged upload URL generated');
-
-      // Step 2: Upload to GCS using axios (more reliable than fetch for multipart)
-      const axios = require('axios');
-      const FormData = require('form-data');
-      
-      const formData = new FormData();
-      
-      // Add parameters
-      parameters.forEach(param => {
-        formData.append(param.name, param.value);
-      });
-      
-      // Add file
-      formData.append('file', fileBuffer, {
-        filename: filename,
-        contentType: contentType
-      });
-
-      try {
-        await axios.post(url, formData, {
-          headers: formData.getHeaders(),
-          maxBodyLength: Infinity,
-          maxContentLength: Infinity
-        });
-        console.log('✓ File uploaded to GCS');
-      } catch (uploadError) {
-        console.error('GCS upload error:', uploadError.response?.data || uploadError.message);
-        throw new Error(`GCS upload failed: ${uploadError.message}`);
-      }
-
-      // Step 3: Create product media
-      const mutation = `
-        mutation productCreateMedia($media: [CreateMediaInput!]!, $productId: ID!) {
-          productCreateMedia(media: $media, productId: $productId) {
-            media {
-              ... on MediaImage {
-                id
-                image {
-                  url
-                  altText
-                }
-                status
-                mediaContentType
-                createdAt
-              }
-            }
-            mediaUserErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
-
-      const response = await this.client.query({
-        data: {
-          query: mutation,
-          variables: {
-            productId: productId,
-            media: [{
-              alt: filename,
-              mediaContentType: "IMAGE",
-              originalSource: resourceUrl
-            }]
-          }
-        }
-      });
-
-      if (response.body.data.productCreateMedia.mediaUserErrors?.length > 0) {
-        const errors = response.body.data.productCreateMedia.mediaUserErrors;
-        throw new Error(`Media upload error: ${errors.map(e => e.message).join(', ')}`);
-      }
-
-      const media = response.body.data.productCreateMedia.media[0];
-      console.log('✓ File uploaded to Shopify CDN:', media.image.url);
+      const image = response.body.image;
+      console.log('✓ File uploaded to Shopify CDN:', image.src);
 
       return {
-        id: media.id,
-        url: media.image.url,
-        alt: media.image.altText || filename,
-        createdAt: media.createdAt,
-        fileStatus: media.status,
+        id: `gid://shopify/ProductImage/${image.id}`,
+        url: image.src,
+        alt: image.alt || filename,
+        createdAt: image.created_at,
+        fileStatus: 'READY',
         mimeType: contentType,
         originalFileSize: fileBuffer.length
       };
@@ -209,51 +86,25 @@ class ImageService {
     }
   }
 
-  // Get all images from product media
+  // Get all images from product
   async getAllImages() {
     try {
       const productId = await this.getStorageProduct();
 
-      const query = `
-        query($id: ID!) {
-          product(id: $id) {
-            media(first: 250) {
-              edges {
-                node {
-                  ... on MediaImage {
-                    id
-                    image {
-                      url
-                      altText
-                    }
-                    status
-                    mediaContentType
-                    createdAt
-                  }
-                }
-              }
-            }
-          }
-        }
-      `;
-
-      const response = await this.client.query({
-        data: {
-          query,
-          variables: { id: productId }
-        }
+      const response = await this.restClient.get({
+        path: `products/${productId}/images`
       });
 
-      if (!response.body.data?.product?.media) {
+      if (!response.body.images) {
         return [];
       }
 
-      return response.body.data.product.media.edges.map(edge => ({
-        id: edge.node.id,
-        url: edge.node.image.url,
-        alt: edge.node.image.altText || 'Image',
-        createdAt: edge.node.createdAt,
-        fileStatus: edge.node.status,
+      return response.body.images.map(img => ({
+        id: `gid://shopify/ProductImage/${img.id}`,
+        url: img.src,
+        alt: img.alt || 'Image',
+        createdAt: img.created_at,
+        fileStatus: 'READY',
         mimeType: 'image/*',
         originalFileSize: null
       }));
@@ -264,77 +115,49 @@ class ImageService {
   }
 
   // Get single image by ID
-  async getImageById(mediaId) {
-    const query = `
-      query($id: ID!) {
-        node(id: $id) {
-          ... on MediaImage {
-            id
-            image {
-              url
-              altText
-            }
-            status
-            createdAt
-          }
-        }
-      }
-    `;
+  async getImageById(imageId) {
+    try {
+      const productId = await this.getStorageProduct();
+      
+      // Extract numeric ID from GID if needed
+      const numericId = imageId.includes('/') ? imageId.split('/').pop() : imageId;
 
-    const fullId = mediaId.startsWith('gid://') 
-      ? mediaId 
-      : `gid://shopify/MediaImage/${mediaId}`;
+      const response = await this.restClient.get({
+        path: `products/${productId}/images/${numericId}`
+      });
 
-    const response = await this.client.query({
-      data: {
-        query,
-        variables: { id: fullId }
-      }
-    });
-
-    const node = response.body.data?.node;
-    if (!node) return null;
-
-    return {
-      id: node.id,
-      url: node.image.url,
-      alt: node.image.altText,
-      createdAt: node.createdAt,
-      fileStatus: node.status
-    };
+      const img = response.body.image;
+      
+      return {
+        id: `gid://shopify/ProductImage/${img.id}`,
+        url: img.src,
+        alt: img.alt,
+        createdAt: img.created_at,
+        fileStatus: 'READY'
+      };
+    } catch (error) {
+      console.error('Error fetching image:', error);
+      return null;
+    }
   }
 
   // Delete image from Shopify
-  async deleteImage(mediaId) {
-    const productId = await this.getStorageProduct();
+  async deleteImage(imageId) {
+    try {
+      const productId = await this.getStorageProduct();
+      
+      // Extract numeric ID from GID if needed
+      const numericId = imageId.includes('/') ? imageId.split('/').pop() : imageId;
 
-    const mutation = `
-      mutation productDeleteMedia($mediaIds: [ID!]!, $productId: ID!) {
-        productDeleteMedia(mediaIds: $mediaIds, productId: $productId) {
-          deletedMediaIds
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `;
+      await this.restClient.delete({
+        path: `products/${productId}/images/${numericId}`
+      });
 
-    const fullId = mediaId.startsWith('gid://') 
-      ? mediaId 
-      : `gid://shopify/MediaImage/${mediaId}`;
-
-    const response = await this.client.query({
-      data: {
-        query: mutation,
-        variables: {
-          productId: productId,
-          mediaIds: [fullId]
-        }
-      }
-    });
-
-    return response.body.data.productDeleteMedia;
+      return { deletedId: imageId };
+    } catch (error) {
+      console.error('Error deleting image:', error);
+      throw error;
+    }
   }
 }
 
