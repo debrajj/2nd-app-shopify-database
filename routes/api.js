@@ -35,7 +35,8 @@ router.get('/images', async (req, res) => {
     const imageData = images.map(img => ({
       id: img.id,
       filename: img.alt,
-      url: img.url,
+      url: img.url, // Shopify CDN URL
+      cdnUrl: img.url,
       contentType: img.mimeType,
       size: img.originalFileSize,
       uploadedAt: img.createdAt,
@@ -47,7 +48,7 @@ router.get('/images', async (req, res) => {
       success: true,
       count: imageData.length,
       images: imageData,
-      storage: 'shopify'
+      storage: 'shopify-cdn'
     });
   } catch (error) {
     console.error('API error:', error);
@@ -55,7 +56,7 @@ router.get('/images', async (req, res) => {
   }
 });
 
-// Get single image by ID (serves base64 image data)
+// Get single image by ID (redirects to Shopify CDN)
 router.get('/images/:id', async (req, res) => {
   try {
     const session = await getSession(req);
@@ -63,17 +64,12 @@ router.get('/images/:id', async (req, res) => {
     
     const image = await imageService.getImageById(req.params.id);
     
-    if (!image || !image.data) {
+    if (!image || !image.url) {
       return res.status(404).json({ error: 'Image not found' });
     }
 
-    // Convert base64 to buffer and serve
-    const imageBuffer = Buffer.from(image.data, 'base64');
-    
-    res.set('Content-Type', image.contentType);
-    res.set('Content-Length', imageBuffer.length);
-    res.set('Cache-Control', 'public, max-age=31536000');
-    res.send(imageBuffer);
+    // Redirect to Shopify CDN URL
+    res.redirect(image.url);
   } catch (error) {
     console.error('Image fetch error:', error);
     res.status(500).json({ error: error.message });

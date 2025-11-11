@@ -8,7 +8,7 @@ const shopify = require('../config/shopify');
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 50 * 1024 } // 50KB limit (metaobject limitation)
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB limit
 });
 
 // Helper to get or create session
@@ -80,11 +80,11 @@ router.get('/', async (req, res) => {
         <div class="upload-form">
           <h2>Upload New Image</h2>
           <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
-            ⚠️ Maximum file size: 37KB (due to Shopify metaobject limitations)
+            📦 Files are uploaded to Shopify CDN
           </p>
           <form action="/dashboard/upload" method="POST" enctype="multipart/form-data" id="uploadForm">
             <input type="file" name="image" accept="image/*" required id="fileInput">
-            <button type="submit" id="uploadBtn">Upload to Shopify</button>
+            <button type="submit" id="uploadBtn">Upload to Shopify CDN</button>
             <span class="loading" id="loading">⏳ Uploading...</span>
           </form>
         </div>
@@ -102,18 +102,19 @@ router.get('/', async (req, res) => {
           <div class="images-grid">
             ${images.map(img => {
               const fileSize = img.originalFileSize ? (img.originalFileSize / 1024).toFixed(2) + ' KB' : 'N/A';
-              const imageId = img.id.split('/').pop();
+              const isProcessing = img.fileStatus === 'PROCESSING';
               
               return `
                 <div class="image-card">
-                  <img src="/api/images/${imageId}" 
+                  <img src="${img.url || ''}" 
                        alt="${img.alt || 'Image'}" 
-                       onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22150%22%3E%3Crect fill=%22%23f4f6f8%22 width=%22200%22 height=%22150%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2214%22%3ENo Preview%3C/text%3E%3C/svg%3E'">
+                       onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22150%22%3E%3Crect fill=%22%23f4f6f8%22 width=%22200%22 height=%22150%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2214%22%3E${isProcessing ? 'Processing...' : 'No Preview'}%3C/text%3E%3C/svg%3E'">
                   <div class="image-info">
                     <strong title="${img.alt || 'Untitled'}">${img.alt || 'Untitled'}</strong>
                     Size: ${fileSize}<br>
                     Uploaded: ${new Date(img.createdAt).toLocaleDateString()}<br>
-                    <span class="status-badge status-ready">${img.fileStatus}</span>
+                    <span class="status-badge ${isProcessing ? 'status-processing' : 'status-ready'}">${img.fileStatus}</span>
+                    ${img.url ? `<br><a href="${img.url}" target="_blank" style="font-size: 11px; color: #5c6ac4;">View on CDN →</a>` : ''}
                   </div>
                 </div>
               `;
@@ -125,9 +126,26 @@ router.get('/', async (req, res) => {
           <p><strong>API Endpoint:</strong> <code>GET /api/images</code> - Returns all image data</p>
           <p><a href="/api/images" target="_blank">View API Response →</a></p>
           <p style="font-size: 12px; color: #999; margin-top: 10px;">
-            💾 Images are stored in Shopify's database as metaobjects
+            📦 Images are stored on Shopify CDN (https://cdn.shopify.com/...)
           </p>
         </div>
+
+        <script>
+          const form = document.getElementById('uploadForm');
+          const uploadBtn = document.getElementById('uploadBtn');
+          const loading = document.getElementById('loading');
+
+          form.addEventListener('submit', function() {
+            uploadBtn.style.display = 'none';
+            loading.style.display = 'inline';
+          });
+
+          // Auto-refresh if there are processing files
+          const hasProcessing = ${images.some(img => img.fileStatus === 'PROCESSING')};
+          if (hasProcessing) {
+            setTimeout(() => location.reload(), 5000);
+          }
+        </script>
 
         <script>
           const form = document.getElementById('uploadForm');
