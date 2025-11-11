@@ -9,8 +9,88 @@ class ImageService {
     this.client = new shopify.clients.Graphql({ session });
   }
 
+  // Create metaobject definition if it doesn't exist
+  async ensureMetaobjectDefinition() {
+    try {
+      const createDefinitionMutation = `
+        mutation CreateMetaobjectDefinition($definition: MetaobjectDefinitionCreateInput!) {
+          metaobjectDefinitionCreate(definition: $definition) {
+            metaobjectDefinition {
+              id
+              type
+              name
+            }
+            userErrors {
+              field
+              message
+              code
+            }
+          }
+        }
+      `;
+
+      const response = await this.client.query({
+        data: {
+          query: createDefinitionMutation,
+          variables: {
+            definition: {
+              type: "image_storage",
+              name: "Image Storage",
+              fieldDefinitions: [
+                {
+                  key: "filename",
+                  name: "Filename",
+                  type: "single_line_text_field"
+                },
+                {
+                  key: "content_type",
+                  name: "Content Type",
+                  type: "single_line_text_field"
+                },
+                {
+                  key: "size",
+                  name: "Size",
+                  type: "single_line_text_field"
+                },
+                {
+                  key: "data",
+                  name: "Data",
+                  type: "multi_line_text_field"
+                },
+                {
+                  key: "uploaded_at",
+                  name: "Uploaded At",
+                  type: "single_line_text_field"
+                }
+              ]
+            }
+          }
+        }
+      });
+
+      if (response.body.data?.metaobjectDefinitionCreate?.userErrors?.length > 0) {
+        const errors = response.body.data.metaobjectDefinitionCreate.userErrors;
+        // If definition already exists, that's fine
+        if (errors[0].code === 'TAKEN') {
+          console.log('✓ Metaobject definition already exists');
+          return true;
+        }
+        console.error('Definition creation errors:', errors);
+        return false;
+      }
+
+      console.log('✓ Metaobject definition created successfully');
+      return true;
+    } catch (error) {
+      console.error('Error creating metaobject definition:', error);
+      return false;
+    }
+  }
+
   // Upload image as metaobject in Shopify
   async uploadImage(fileBuffer, filename, contentType) {
+    // Ensure metaobject definition exists
+    await this.ensureMetaobjectDefinition();
     try {
       console.log('Storing image in Shopify:', filename);
       

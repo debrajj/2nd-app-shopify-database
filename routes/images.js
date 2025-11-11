@@ -31,7 +31,7 @@ async function getSession(req) {
     accessToken,
     isOnline: false,
     state: 'test',
-    scope: 'read_products,write_products,read_content,write_content,read_files,write_files'
+    scope: 'read_products,write_products,read_content,write_content,read_metaobjects,write_metaobjects'
   };
 }
 

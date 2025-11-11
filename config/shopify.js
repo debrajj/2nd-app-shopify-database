@@ -15,7 +15,14 @@ const getHostName = () => {
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
-  scopes: ['read_products', 'write_products', 'read_content', 'write_content', 'read_files', 'write_files'],
+  scopes: [
+    'read_products', 
+    'write_products', 
+    'read_content', 
+    'write_content', 
+    'read_metaobjects',
+    'write_metaobjects'
+  ],
   hostName: getHostName(),
   apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: false,
