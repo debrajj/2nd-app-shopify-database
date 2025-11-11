@@ -69,7 +69,7 @@ class ImageService {
     return createResponse.body.data.productCreate.product.id;
   }
 
-  // Upload image to Shopify CDN via product media
+  // Upload image to Shopify CDN via product media with staged upload
   async uploadImage(fileBuffer, filename, contentType) {
     try {
       console.log('Uploading file to Shopify CDN:', filename);
@@ -78,11 +78,77 @@ class ImageService {
       const productId = await this.getStorageProduct();
       console.log('✓ Using storage product:', productId);
 
-      // Convert to base64 for upload
-      const base64Data = fileBuffer.toString('base64');
-      const dataUrl = `data:${contentType};base64,${base64Data}`;
+      // Step 1: Create staged upload for IMAGE
+      const stagedUploadMutation = `
+        mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
+          stagedUploadsCreate(input: $input) {
+            stagedTargets {
+              url
+              resourceUrl
+              parameters {
+                name
+                value
+              }
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `;
 
-      // Upload as product media
+      const stagedResponse = await this.client.query({
+        data: {
+          query: stagedUploadMutation,
+          variables: {
+            input: [{
+              filename: filename,
+              mimeType: contentType,
+              resource: "PRODUCT_IMAGE",
+              fileSize: fileBuffer.length.toString()
+            }]
+          }
+        }
+      });
+
+      if (stagedResponse.body.data.stagedUploadsCreate.userErrors?.length > 0) {
+        throw new Error(`Staged upload error: ${stagedResponse.body.data.stagedUploadsCreate.userErrors.map(e => e.message).join(', ')}`);
+      }
+
+      const { url, resourceUrl, parameters } = stagedResponse.body.data.stagedUploadsCreate.stagedTargets[0];
+      console.log('✓ Staged upload URL generated');
+
+      // Step 2: Upload to GCS using axios (more reliable than fetch for multipart)
+      const axios = require('axios');
+      const FormData = require('form-data');
+      
+      const formData = new FormData();
+      
+      // Add parameters
+      parameters.forEach(param => {
+        formData.append(param.name, param.value);
+      });
+      
+      // Add file
+      formData.append('file', fileBuffer, {
+        filename: filename,
+        contentType: contentType
+      });
+
+      try {
+        await axios.post(url, formData, {
+          headers: formData.getHeaders(),
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity
+        });
+        console.log('✓ File uploaded to GCS');
+      } catch (uploadError) {
+        console.error('GCS upload error:', uploadError.response?.data || uploadError.message);
+        throw new Error(`GCS upload failed: ${uploadError.message}`);
+      }
+
+      // Step 3: Create product media
       const mutation = `
         mutation productCreateMedia($media: [CreateMediaInput!]!, $productId: ID!) {
           productCreateMedia(media: $media, productId: $productId) {
@@ -114,7 +180,7 @@ class ImageService {
             media: [{
               alt: filename,
               mediaContentType: "IMAGE",
-              originalSource: dataUrl
+              originalSource: resourceUrl
             }]
           }
         }
