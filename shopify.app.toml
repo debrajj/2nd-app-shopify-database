@@ -1,0 +1,21 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+name = "shopify-image-app"
+client_id = "6d5593dbc8c7a2c4691d0a7b6ea29a18"
+application_url = "https://shopify-json-frist-mongodb.vercel.app/"
+embedded = false
+
+[access_scopes]
+scopes = "read_products,write_products"
+
+[auth]
+redirect_urls = [
+  "https://shopify-json-frist-mongodb.vercel.app/auth/callback",
+  "http://localhost:3001/auth/callback"
+]
+
+[webhooks]
+api_version = "2024-10"
+
+[pos]
+embedded = false
