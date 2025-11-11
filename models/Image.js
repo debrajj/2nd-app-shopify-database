@@ -62,7 +62,7 @@ class ImageService {
       
       const formData = new FormData();
       
-      // Add parameters in the correct order
+      // Add parameters in the correct order (IMPORTANT: order matters for Google Cloud Storage)
       stagedTarget.parameters.forEach(param => {
         formData.append(param.name, param.value);
       });
@@ -73,10 +73,10 @@ class ImageService {
         contentType: contentType
       });
 
+      // Upload without custom headers - let form-data handle it automatically
       const uploadResponse = await fetch(stagedTarget.url, {
         method: 'POST',
-        body: formData,
-        headers: formData.getHeaders()
+        body: formData
       });
 
       if (!uploadResponse.ok) {
