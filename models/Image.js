@@ -58,22 +58,38 @@ class ImageService {
       console.log('✓ Staged upload URL generated');
 
       // Step 2: Upload file to Google Cloud Storage
-      const formData = new FormData();
+      // Build multipart form data manually to avoid signature issues
+      const boundary = `----WebKitFormBoundary${Math.random().toString(36).substring(2)}`;
+      const parts = [];
       
-      // Add all parameters from Shopify FIRST
+      // Add all parameters from Shopify
       parameters.forEach(param => {
-        formData.append(param.name, param.value);
+        parts.push(
+          `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="${param.name}"\r\n\r\n` +
+          `${param.value}\r\n`
+        );
       });
       
-      // Add file LAST
-      formData.append('file', fileBuffer, {
-        filename: filename,
-        contentType: contentType
-      });
+      // Add file
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+        `Content-Type: ${contentType}\r\n\r\n`
+      );
+      
+      // Combine parts with file buffer
+      const header = Buffer.from(parts.join(''), 'utf8');
+      const footer = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+      const body = Buffer.concat([header, fileBuffer, footer]);
 
       const uploadResponse = await fetch(url, {
         method: 'POST',
-        body: formData
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length.toString()
+        },
+        body: body
       });
 
       if (!uploadResponse.ok) {
