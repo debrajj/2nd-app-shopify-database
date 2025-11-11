@@ -2,93 +2,26 @@
 // This module provides helper functions for managing image data in Shopify
 
 const shopify = require('../config/shopify');
+const fetch = require('node-fetch');
 
 class ImageService {
   constructor(session) {
     this.session = session;
     this.client = new shopify.clients.Graphql({ session });
+    this.restClient = new shopify.clients.Rest({ session });
   }
 
-  // Upload image to Shopify Files API
+  // Upload image to Shopify using Metafields (simpler approach)
   async uploadImage(fileBuffer, filename, contentType) {
     try {
-      const stagedUploadMutation = `
-        mutation stagedUploadsCreate($input: [StagedUploadInput!]!) {
-          stagedUploadsCreate(input: $input) {
-            stagedTargets {
-              url
-              resourceUrl
-              parameters {
-                name
-                value
-              }
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
-
-      // Step 1: Create staged upload
-      console.log('Step 1: Creating staged upload...');
-      const stagedResponse = await this.client.query({
-        data: {
-          query: stagedUploadMutation,
-          variables: {
-            input: [{
-              filename: filename,
-              mimeType: contentType,
-              resource: "FILE",
-              fileSize: fileBuffer.length.toString()
-            }]
-          }
-        }
-      });
-
-      if (stagedResponse.body.data.stagedUploadsCreate.userErrors?.length > 0) {
-        const errors = stagedResponse.body.data.stagedUploadsCreate.userErrors;
-        throw new Error(`Staged upload error: ${errors.map(e => e.message).join(', ')}`);
-      }
-
-      const stagedTarget = stagedResponse.body.data.stagedUploadsCreate.stagedTargets[0];
-      console.log('✓ Staged upload created:', stagedTarget.resourceUrl);
+      console.log('Uploading file to Shopify:', filename);
       
-      // Step 2: Upload file to staged URL
-      console.log('Step 2: Uploading file to staged URL...');
-      const FormData = require('form-data');
-      const fetch = require('node-fetch');
+      // Convert buffer to base64
+      const base64Data = fileBuffer.toString('base64');
+      const dataUrl = `data:${contentType};base64,${base64Data}`;
       
-      const formData = new FormData();
-      
-      // Add parameters in the correct order (IMPORTANT: order matters for Google Cloud Storage)
-      stagedTarget.parameters.forEach(param => {
-        formData.append(param.name, param.value);
-      });
-      
-      // Add file last
-      formData.append('file', fileBuffer, { 
-        filename: filename,
-        contentType: contentType
-      });
-
-      // Upload without custom headers - let form-data handle it automatically
-      const uploadResponse = await fetch(stagedTarget.url, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        throw new Error(`File upload to staged URL failed: ${uploadResponse.status} - ${errorText}`);
-      }
-
-      console.log('✓ File uploaded to staged URL');
-
-      // Step 3: Create file in Shopify
-      console.log('Step 3: Creating file record in Shopify...');
-      const fileCreateMutation = `
+      // Use GraphQL to create a file with base64 data
+      const mutation = `
         mutation fileCreate($files: [FileCreateInput!]!) {
           fileCreate(files: $files) {
             files {
@@ -110,26 +43,26 @@ class ImageService {
         }
       `;
 
-      const fileResponse = await this.client.query({
+      const response = await this.client.query({
         data: {
-          query: fileCreateMutation,
+          query: mutation,
           variables: {
             files: [{
               alt: filename,
               contentType: "FILE",
-              originalSource: stagedTarget.resourceUrl
+              originalSource: dataUrl
             }]
           }
         }
       });
 
-      if (fileResponse.body.data.fileCreate.userErrors?.length > 0) {
-        const errors = fileResponse.body.data.fileCreate.userErrors;
-        throw new Error(`File create error: ${errors.map(e => e.message).join(', ')}`);
+      if (response.body.data.fileCreate.userErrors?.length > 0) {
+        const errors = response.body.data.fileCreate.userErrors;
+        throw new Error(`File upload error: ${errors.map(e => e.message).join(', ')}`);
       }
 
-      const createdFile = fileResponse.body.data.fileCreate.files[0];
-      console.log('✓ File created in Shopify:', createdFile.id);
+      const createdFile = response.body.data.fileCreate.files[0];
+      console.log('✓ File uploaded to Shopify:', createdFile.id);
 
       return createdFile;
     } catch (error) {
