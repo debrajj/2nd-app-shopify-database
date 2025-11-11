@@ -1,39 +1,34 @@
-// Image metadata stored in Shopify metaobjects
-// This module provides helper functions for managing image data in Shopify
+// Image storage using Shopify Metaobjects
+// Stores image data directly in Shopify's database
 
 const shopify = require('../config/shopify');
-const fetch = require('node-fetch');
 
 class ImageService {
   constructor(session) {
     this.session = session;
     this.client = new shopify.clients.Graphql({ session });
-    this.restClient = new shopify.clients.Rest({ session });
   }
 
-  // Upload image to Shopify using Metafields (simpler approach)
+  // Upload image as metaobject in Shopify
   async uploadImage(fileBuffer, filename, contentType) {
     try {
-      console.log('Uploading file to Shopify:', filename);
+      console.log('Storing image in Shopify:', filename);
       
       // Convert buffer to base64
       const base64Data = fileBuffer.toString('base64');
-      const dataUrl = `data:${contentType};base64,${base64Data}`;
       
-      // Use GraphQL to create a file with base64 data
+      // Create metaobject to store image data
       const mutation = `
-        mutation fileCreate($files: [FileCreateInput!]!) {
-          fileCreate(files: $files) {
-            files {
+        mutation CreateMetaobject($metaobject: MetaobjectCreateInput!) {
+          metaobjectCreate(metaobject: $metaobject) {
+            metaobject {
               id
-              alt
-              createdAt
-              fileStatus
-              ... on GenericFile {
-                url
-                mimeType
-                originalFileSize
+              handle
+              fields {
+                key
+                value
               }
+              updatedAt
             }
             userErrors {
               field
@@ -43,96 +38,156 @@ class ImageService {
         }
       `;
 
+      const timestamp = Date.now();
+      const handle = `image-${timestamp}`;
+
       const response = await this.client.query({
         data: {
           query: mutation,
           variables: {
-            files: [{
-              alt: filename,
-              contentType: "FILE",
-              originalSource: dataUrl
-            }]
+            metaobject: {
+              type: "image_storage",
+              handle: handle,
+              fields: [
+                { key: "filename", value: filename },
+                { key: "content_type", value: contentType },
+                { key: "size", value: fileBuffer.length.toString() },
+                { key: "data", value: base64Data },
+                { key: "uploaded_at", value: new Date().toISOString() }
+              ]
+            }
           }
         }
       });
 
-      if (response.body.data.fileCreate.userErrors?.length > 0) {
-        const errors = response.body.data.fileCreate.userErrors;
-        throw new Error(`File upload error: ${errors.map(e => e.message).join(', ')}`);
+      if (response.body.data?.metaobjectCreate?.userErrors?.length > 0) {
+        const errors = response.body.data.metaobjectCreate.userErrors;
+        throw new Error(`Metaobject create error: ${errors.map(e => e.message).join(', ')}`);
       }
 
-      const createdFile = response.body.data.fileCreate.files[0];
-      console.log('✓ File uploaded to Shopify:', createdFile.id);
+      const metaobject = response.body.data.metaobjectCreate.metaobject;
+      console.log('✓ Image stored in Shopify:', metaobject.id);
 
-      return createdFile;
+      // Return in a format similar to file API
+      return {
+        id: metaobject.id,
+        alt: filename,
+        createdAt: metaobject.updatedAt,
+        fileStatus: 'READY',
+        url: `/api/images/${metaobject.id.split('/').pop()}`,
+        mimeType: contentType,
+        originalFileSize: fileBuffer.length
+      };
     } catch (error) {
       console.error('Upload error details:', error);
       throw error;
     }
   }
 
-  // Get all files from Shopify
+  // Get all images from Shopify metaobjects
   async getAllImages() {
     const query = `
       query {
-        files(first: 250, query: "media_type:GENERIC_FILE") {
+        metaobjects(type: "image_storage", first: 250) {
           edges {
             node {
               id
-              alt
-              createdAt
-              fileStatus
-              ... on GenericFile {
-                url
-                mimeType
-                originalFileSize
+              handle
+              fields {
+                key
+                value
               }
+              updatedAt
             }
           }
         }
       }
     `;
 
-    const response = await this.client.query({
-      data: { query }
-    });
+    try {
+      const response = await this.client.query({
+        data: { query }
+      });
 
-    return response.body.data.files.edges.map(edge => edge.node);
+      if (!response.body.data?.metaobjects) {
+        return [];
+      }
+
+      return response.body.data.metaobjects.edges.map(edge => {
+        const fields = {};
+        edge.node.fields.forEach(field => {
+          fields[field.key] = field.value;
+        });
+
+        return {
+          id: edge.node.id,
+          alt: fields.filename || 'Untitled',
+          createdAt: fields.uploaded_at || edge.node.updatedAt,
+          fileStatus: 'READY',
+          url: `/api/images/${edge.node.id.split('/').pop()}`,
+          mimeType: fields.content_type,
+          originalFileSize: parseInt(fields.size || '0')
+        };
+      });
+    } catch (error) {
+      console.error('Error fetching images:', error);
+      return [];
+    }
   }
 
-  // Get single file by ID
-  async getImageById(fileId) {
+  // Get single image by ID
+  async getImageById(metaobjectId) {
     const query = `
       query($id: ID!) {
-        node(id: $id) {
-          ... on GenericFile {
-            id
-            url
-            alt
-            mimeType
-            originalFileSize
-            createdAt
+        metaobject(id: $id) {
+          id
+          handle
+          fields {
+            key
+            value
           }
+          updatedAt
         }
       }
     `;
 
+    const fullId = metaobjectId.startsWith('gid://') 
+      ? metaobjectId 
+      : `gid://shopify/Metaobject/${metaobjectId}`;
+
     const response = await this.client.query({
       data: {
         query,
-        variables: { id: fileId }
+        variables: { id: fullId }
       }
     });
 
-    return response.body.data.node;
+    if (!response.body.data?.metaobject) {
+      return null;
+    }
+
+    const metaobject = response.body.data.metaobject;
+    const fields = {};
+    metaobject.fields.forEach(field => {
+      fields[field.key] = field.value;
+    });
+
+    return {
+      id: metaobject.id,
+      filename: fields.filename,
+      contentType: fields.content_type,
+      size: parseInt(fields.size || '0'),
+      data: fields.data, // base64 data
+      uploadedAt: fields.uploaded_at
+    };
   }
 
-  // Delete file from Shopify
-  async deleteImage(fileId) {
+  // Delete image from Shopify
+  async deleteImage(metaobjectId) {
     const mutation = `
-      mutation fileDelete($input: [ID!]!) {
-        fileDelete(fileIds: $input) {
-          deletedFileIds
+      mutation metaobjectDelete($id: ID!) {
+        metaobjectDelete(id: $id) {
+          deletedId
           userErrors {
             field
             message
@@ -141,16 +196,20 @@ class ImageService {
       }
     `;
 
+    const fullId = metaobjectId.startsWith('gid://') 
+      ? metaobjectId 
+      : `gid://shopify/Metaobject/${metaobjectId}`;
+
     const response = await this.client.query({
       data: {
         query: mutation,
         variables: {
-          input: [fileId]
+          id: fullId
         }
       }
     });
 
-    return response.body.data.fileDelete;
+    return response.body.data.metaobjectDelete;
   }
 }
 

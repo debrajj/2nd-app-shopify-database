@@ -98,19 +98,19 @@ router.get('/', async (req, res) => {
         ` : `
           <div class="images-grid">
             ${images.map(img => {
-              const isProcessing = img.fileStatus === 'PROCESSING';
-              const fileSize = img.originalFileSize ? (img.originalFileSize / 1024).toFixed(2) + ' KB' : 'Processing...';
+              const fileSize = img.originalFileSize ? (img.originalFileSize / 1024).toFixed(2) + ' KB' : 'N/A';
+              const imageId = img.id.split('/').pop();
               
               return `
                 <div class="image-card">
-                  <img src="${img.url || 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22150%22%3E%3Crect fill=%22%23f4f6f8%22 width=%22200%22 height=%22150%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2214%22%3EProcessing...%3C/text%3E%3C/svg%3E'}" 
+                  <img src="/api/images/${imageId}" 
                        alt="${img.alt || 'Image'}" 
                        onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22150%22%3E%3Crect fill=%22%23f4f6f8%22 width=%22200%22 height=%22150%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 fill=%22%23999%22 font-size=%2214%22%3ENo Preview%3C/text%3E%3C/svg%3E'">
                   <div class="image-info">
                     <strong title="${img.alt || 'Untitled'}">${img.alt || 'Untitled'}</strong>
                     Size: ${fileSize}<br>
                     Uploaded: ${new Date(img.createdAt).toLocaleDateString()}<br>
-                    <span class="status-badge ${isProcessing ? 'status-processing' : 'status-ready'}">${img.fileStatus}</span>
+                    <span class="status-badge status-ready">${img.fileStatus}</span>
                   </div>
                 </div>
               `;
@@ -122,7 +122,7 @@ router.get('/', async (req, res) => {
           <p><strong>API Endpoint:</strong> <code>GET /api/images</code> - Returns all image data</p>
           <p><a href="/api/images" target="_blank">View API Response →</a></p>
           <p style="font-size: 12px; color: #999; margin-top: 10px;">
-            💡 Tip: If images show "PROCESSING" status, refresh the page after a few seconds.
+            💾 Images are stored in Shopify's database as metaobjects
           </p>
         </div>
 
@@ -130,18 +130,11 @@ router.get('/', async (req, res) => {
           const form = document.getElementById('uploadForm');
           const uploadBtn = document.getElementById('uploadBtn');
           const loading = document.getElementById('loading');
-          const fileInput = document.getElementById('fileInput');
 
           form.addEventListener('submit', function() {
             uploadBtn.style.display = 'none';
             loading.style.display = 'inline';
           });
-
-          // Auto-refresh if there are processing files
-          const hasProcessing = ${images.some(img => img.fileStatus === 'PROCESSING')};
-          if (hasProcessing) {
-            setTimeout(() => location.reload(), 5000);
-          }
         </script>
       </body>
       </html>

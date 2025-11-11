@@ -55,26 +55,25 @@ router.get('/images', async (req, res) => {
   }
 });
 
-// Get single image by ID (redirects to Shopify URL)
+// Get single image by ID (serves base64 image data)
 router.get('/images/:id', async (req, res) => {
   try {
     const session = await getSession(req);
     const imageService = new ImageService(session);
     
-    // Ensure ID has proper Shopify format
-    let fileId = req.params.id;
-    if (!fileId.startsWith('gid://')) {
-      fileId = `gid://shopify/GenericFile/${fileId}`;
-    }
+    const image = await imageService.getImageById(req.params.id);
     
-    const image = await imageService.getImageById(fileId);
-    
-    if (!image || !image.url) {
+    if (!image || !image.data) {
       return res.status(404).json({ error: 'Image not found' });
     }
 
-    // Redirect to Shopify CDN URL
-    res.redirect(image.url);
+    // Convert base64 to buffer and serve
+    const imageBuffer = Buffer.from(image.data, 'base64');
+    
+    res.set('Content-Type', image.contentType);
+    res.set('Content-Length', imageBuffer.length);
+    res.set('Cache-Control', 'public, max-age=31536000');
+    res.send(imageBuffer);
   } catch (error) {
     console.error('Image fetch error:', error);
     res.status(500).json({ error: error.message });
