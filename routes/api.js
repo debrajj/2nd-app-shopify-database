@@ -8,14 +8,20 @@ async function getSession(req) {
   const shop = process.env.SHOPIFY_SHOP_DOMAIN;
   const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
   
-  if (!shop || !accessToken) {
-    throw new Error('Missing Shopify credentials');
+  if (!shop) {
+    throw new Error('SHOPIFY_SHOP_DOMAIN is not configured in environment variables');
+  }
+  
+  if (!accessToken) {
+    throw new Error('SHOPIFY_ACCESS_TOKEN is not configured in environment variables');
   }
 
   return {
     shop,
     accessToken,
-    isOnline: false
+    isOnline: false,
+    state: 'test',
+    scope: 'read_products,write_products,read_content,write_content,read_files,write_files'
   };
 }
 

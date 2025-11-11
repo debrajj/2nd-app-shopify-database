@@ -157,7 +157,7 @@ HOST=https://your-vercel-url.vercel.app
 PORT=3001
 ```
 
-**Note:** Get your actual credentials from your `.env` file (not committed to git).
+**Note:** Get your actual credentials from your `.env` file (not 
 
 ---
 
