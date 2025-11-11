@@ -1,9 +1,7 @@
-// Image storage using Shopify Files API
-// Uploads files to Shopify CDN (https://cdn.shopify.com/...)
+// Image storage using Shopify Product Images
+// Uploads files to Shopify CDN and shows in Admin → Content → Files
 
 const shopify = require('../config/shopify');
-const fetch = require('node-fetch');
-const FormData = require('form-data');
 
 class ImageService {
   constructor(session) {
@@ -11,83 +9,81 @@ class ImageService {
     this.client = new shopify.clients.Graphql({ session });
   }
 
-  // Upload image to Shopify Files API using IMAGE resource type (simpler)
+  // Get or create a dummy product for storing images
+  async getStorageProduct() {
+    // Check if storage product exists
+    const query = `
+      query {
+        products(first: 1, query: "tag:image-storage-app") {
+          edges {
+            node {
+              id
+              title
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await this.client.query({
+      data: { query }
+    });
+
+    if (response.body.data.products.edges.length > 0) {
+      return response.body.data.products.edges[0].node.id;
+    }
+
+    // Create storage product
+    const createMutation = `
+      mutation productCreate($input: ProductInput!) {
+        productCreate(input: $input) {
+          product {
+            id
+            title
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const createResponse = await this.client.query({
+      data: {
+        query: createMutation,
+        variables: {
+          input: {
+            title: "Image Storage (App)",
+            status: "DRAFT",
+            tags: ["image-storage-app", "do-not-delete"]
+          }
+        }
+      }
+    });
+
+    if (createResponse.body.data.productCreate.userErrors?.length > 0) {
+      throw new Error(`Product create error: ${createResponse.body.data.productCreate.userErrors.map(e => e.message).join(', ')}`);
+    }
+
+    return createResponse.body.data.productCreate.product.id;
+  }
+
+  // Upload image to Shopify CDN via product media
   async uploadImage(fileBuffer, filename, contentType) {
     try {
       console.log('Uploading file to Shopify CDN:', filename);
       
-      // Use IMAGE resource type instead of FILE - it's simpler and works better
-      const stagedUploadMutation = `
-        mutation generateStagedUploads($input: [StagedUploadInput!]!) {
-          stagedUploadsCreate(input: $input) {
-            stagedTargets {
-              url
-              resourceUrl
-              parameters {
-                name
-                value
-              }
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
+      // Get storage product
+      const productId = await this.getStorageProduct();
+      console.log('✓ Using storage product:', productId);
 
-      const stagedResponse = await this.client.query({
-        data: {
-          query: stagedUploadMutation,
-          variables: {
-            input: [{
-              filename: filename,
-              mimeType: contentType,
-              resource: "IMAGE", // Changed from FILE to IMAGE
-              fileSize: fileBuffer.length.toString(),
-              httpMethod: "POST"
-            }]
-          }
-        }
-      });
+      // Convert to base64 for upload
+      const base64Data = fileBuffer.toString('base64');
+      const dataUrl = `data:${contentType};base64,${base64Data}`;
 
-      if (stagedResponse.body.data.stagedUploadsCreate.userErrors?.length > 0) {
-        throw new Error(`Staged upload error: ${stagedResponse.body.data.stagedUploadsCreate.userErrors.map(e => e.message).join(', ')}`);
-      }
-
-      const { url, resourceUrl, parameters } = stagedResponse.body.data.stagedUploadsCreate.stagedTargets[0];
-      console.log('✓ Staged upload URL generated');
-      console.log('Parameters:', parameters);
-
-      // Step 2: Upload file to Google Cloud Storage
-      const formData = new FormData();
-      
-      // Add all parameters from Shopify
-      parameters.forEach(param => {
-        formData.append(param.name, param.value);
-      });
-      
-      // Add file
-      formData.append('file', fileBuffer, {
-        filename: filename,
-        contentType: contentType
-      });
-
-      const uploadResponse = await fetch(url, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        console.error('GCS upload error:', errorText);
-        throw new Error(`GCS upload failed (${uploadResponse.status}): ${errorText}`);
-      }
-
-      console.log('✓ File uploaded to GCS');
-
-      // Step 3: Create file record in Shopify using productCreateMedia
-      const productCreateMutation = `
+      // Upload as product media
+      const mutation = `
         mutation productCreateMedia($media: [CreateMediaInput!]!, $productId: ID!) {
           productCreateMedia(media: $media, productId: $productId) {
             media {
@@ -98,6 +94,8 @@ class ImageService {
                   altText
                 }
                 status
+                mediaContentType
+                createdAt
               }
             }
             mediaUserErrors {
@@ -108,16 +106,34 @@ class ImageService {
         }
       `;
 
-      // For now, just return the resource URL since we need a product ID
-      // In a real app, you'd attach this to a product
-      console.log('✓ File uploaded, resource URL:', resourceUrl);
+      const response = await this.client.query({
+        data: {
+          query: mutation,
+          variables: {
+            productId: productId,
+            media: [{
+              alt: filename,
+              mediaContentType: "IMAGE",
+              originalSource: dataUrl
+            }]
+          }
+        }
+      });
+
+      if (response.body.data.productCreateMedia.mediaUserErrors?.length > 0) {
+        const errors = response.body.data.productCreateMedia.mediaUserErrors;
+        throw new Error(`Media upload error: ${errors.map(e => e.message).join(', ')}`);
+      }
+
+      const media = response.body.data.productCreateMedia.media[0];
+      console.log('✓ File uploaded to Shopify CDN:', media.image.url);
 
       return {
-        id: `temp-${Date.now()}`,
-        url: resourceUrl,
-        alt: filename,
-        createdAt: new Date().toISOString(),
-        fileStatus: 'READY',
+        id: media.id,
+        url: media.image.url,
+        alt: media.image.altText || filename,
+        createdAt: media.createdAt,
+        fileStatus: media.status,
         mimeType: contentType,
         originalFileSize: fileBuffer.length
       };
@@ -127,65 +143,81 @@ class ImageService {
     }
   }
 
-  // Get all files from Shopify
+  // Get all images from product media
   async getAllImages() {
-    const query = `
-      query {
-        files(first: 250, query: "media_type:GENERIC_FILE") {
-          edges {
-            node {
-              ... on GenericFile {
-                id
-                url
-                alt
-                createdAt
-                fileStatus
-                mimeType
-                originalFileSize
+    try {
+      const productId = await this.getStorageProduct();
+
+      const query = `
+        query($id: ID!) {
+          product(id: $id) {
+            media(first: 250) {
+              edges {
+                node {
+                  ... on MediaImage {
+                    id
+                    image {
+                      url
+                      altText
+                    }
+                    status
+                    mediaContentType
+                    createdAt
+                  }
+                }
               }
             }
           }
         }
-      }
-    `;
+      `;
 
-    try {
       const response = await this.client.query({
-        data: { query }
+        data: {
+          query,
+          variables: { id: productId }
+        }
       });
 
-      if (!response.body.data?.files) {
+      if (!response.body.data?.product?.media) {
         return [];
       }
 
-      return response.body.data.files.edges.map(edge => edge.node);
+      return response.body.data.product.media.edges.map(edge => ({
+        id: edge.node.id,
+        url: edge.node.image.url,
+        alt: edge.node.image.altText || 'Image',
+        createdAt: edge.node.createdAt,
+        fileStatus: edge.node.status,
+        mimeType: 'image/*',
+        originalFileSize: null
+      }));
     } catch (error) {
-      console.error('Error fetching files:', error);
+      console.error('Error fetching images:', error);
       return [];
     }
   }
 
-  // Get single file by ID
-  async getImageById(fileId) {
+  // Get single image by ID
+  async getImageById(mediaId) {
     const query = `
       query($id: ID!) {
         node(id: $id) {
-          ... on GenericFile {
+          ... on MediaImage {
             id
-            url
-            alt
+            image {
+              url
+              altText
+            }
+            status
             createdAt
-            fileStatus
-            mimeType
-            originalFileSize
           }
         }
       }
     `;
 
-    const fullId = fileId.startsWith('gid://') 
-      ? fileId 
-      : `gid://shopify/GenericFile/${fileId}`;
+    const fullId = mediaId.startsWith('gid://') 
+      ? mediaId 
+      : `gid://shopify/MediaImage/${mediaId}`;
 
     const response = await this.client.query({
       data: {
@@ -194,15 +226,26 @@ class ImageService {
       }
     });
 
-    return response.body.data?.node;
+    const node = response.body.data?.node;
+    if (!node) return null;
+
+    return {
+      id: node.id,
+      url: node.image.url,
+      alt: node.image.altText,
+      createdAt: node.createdAt,
+      fileStatus: node.status
+    };
   }
 
-  // Delete file from Shopify
-  async deleteImage(fileId) {
+  // Delete image from Shopify
+  async deleteImage(mediaId) {
+    const productId = await this.getStorageProduct();
+
     const mutation = `
-      mutation fileDelete($fileIds: [ID!]!) {
-        fileDelete(fileIds: $fileIds) {
-          deletedFileIds
+      mutation productDeleteMedia($mediaIds: [ID!]!, $productId: ID!) {
+        productDeleteMedia(mediaIds: $mediaIds, productId: $productId) {
+          deletedMediaIds
           userErrors {
             field
             message
@@ -211,20 +254,21 @@ class ImageService {
       }
     `;
 
-    const fullId = fileId.startsWith('gid://') 
-      ? fileId 
-      : `gid://shopify/GenericFile/${fileId}`;
+    const fullId = mediaId.startsWith('gid://') 
+      ? mediaId 
+      : `gid://shopify/MediaImage/${mediaId}`;
 
     const response = await this.client.query({
       data: {
         query: mutation,
         variables: {
-          fileIds: [fullId]
+          productId: productId,
+          mediaIds: [fullId]
         }
       }
     });
 
-    return response.body.data.fileDelete;
+    return response.body.data.productDeleteMedia;
   }
 }
 
