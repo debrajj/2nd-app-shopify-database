@@ -8,7 +8,7 @@ const shopify = require('../config/shopify');
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage: storage,
-  limits: { fileSize: 20 * 1024 * 1024 } // 20MB limit (Shopify supports larger files)
+  limits: { fileSize: 50 * 1024 } // 50KB limit (metaobject limitation)
 });
 
 // Helper to get or create session
@@ -79,6 +79,9 @@ router.get('/', async (req, res) => {
         
         <div class="upload-form">
           <h2>Upload New Image</h2>
+          <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+            ⚠️ Maximum file size: 37KB (due to Shopify metaobject limitations)
+          </p>
           <form action="/dashboard/upload" method="POST" enctype="multipart/form-data" id="uploadForm">
             <input type="file" name="image" accept="image/*" required id="fileInput">
             <button type="submit" id="uploadBtn">Upload to Shopify</button>

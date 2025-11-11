@@ -87,7 +87,7 @@ class ImageService {
     }
   }
 
-  // Upload image as metaobject in Shopify
+  // Upload image as metaobject in Shopify (with size limit check)
   async uploadImage(fileBuffer, filename, contentType) {
     // Ensure metaobject definition exists
     await this.ensureMetaobjectDefinition();
@@ -96,6 +96,13 @@ class ImageService {
       
       // Convert buffer to base64
       const base64Data = fileBuffer.toString('base64');
+      
+      // Check size limit (Shopify metaobject fields have 65KB limit)
+      const MAX_SIZE = 50000; // 50KB base64 (~37KB original file)
+      
+      if (base64Data.length > MAX_SIZE) {
+        throw new Error(`Image too large. Maximum size is ~37KB. Your image is ${Math.round(fileBuffer.length / 1024)}KB. Please upload a smaller image.`);
+      }
       
       // Create metaobject to store image data
       const mutation = `
